@@ -1,0 +1,684 @@
+<!DOCTYPE html>
+<html lang="id">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>Jakarta Cyber Run 🐱</title>
+  <style>
+    @import url('https://fonts.googleapis.com/css2?family=Press+Start+2P&display=swap');
+
+    * { margin: 0; padding: 0; box-sizing: border-box; }
+
+    body {
+      background: #1a0a2e;
+      display: flex;
+      flex-direction: column;
+      align-items: center;
+      justify-content: center;
+      min-height: 100vh;
+      font-family: 'Press Start 2P', monospace;
+      overflow: hidden;
+    }
+
+    h1 {
+      color: #ff8c00;
+      font-size: 1.1rem;
+      margin-bottom: 10px;
+      text-shadow: 0 0 10px #ff8c00, 0 0 20px #ff4500;
+      letter-spacing: 2px;
+    }
+
+    #gameWrapper {
+      position: relative;
+      border: 3px solid #7c3aed;
+      border-radius: 8px;
+      box-shadow: 0 0 30px #7c3aed, 0 0 60px #4c1d95;
+      overflow: hidden;
+    }
+
+    canvas {
+      display: block;
+      background: #000;
+    }
+
+    #ui {
+      position: absolute;
+      top: 10px;
+      right: 14px;
+      text-align: right;
+      pointer-events: none;
+    }
+
+    #scoreDisplay {
+      color: #ff8c00;
+      font-size: 0.75rem;
+      text-shadow: 0 0 6px #ff8c00;
+    }
+
+    #hiScoreDisplay {
+      color: #ffd700;
+      font-size: 0.6rem;
+      margin-top: 2px;
+      text-shadow: 0 0 4px #ffd700;
+    }
+
+    #overlay {
+      position: absolute;
+      top: 0; left: 0;
+      width: 100%; height: 100%;
+      display: flex;
+      flex-direction: column;
+      align-items: center;
+      justify-content: center;
+      background: rgba(10, 0, 30, 0.78);
+      gap: 18px;
+    }
+
+    #overlay.hidden { display: none; }
+
+    #overlayTitle {
+      color: #ff4500;
+      font-size: 1.6rem;
+      text-shadow: 0 0 16px #ff4500, 2px 2px 0 #7c0000;
+      animation: blink 0.9s step-end infinite;
+    }
+
+    @keyframes blink {
+      0%,100% { opacity: 1; }
+      50% { opacity: 0; }
+    }
+
+    #overlayMsg {
+      color: #e0d0ff;
+      font-size: 0.55rem;
+      text-align: center;
+      line-height: 1.8;
+    }
+
+    #restartBtn {
+      background: #7c3aed;
+      color: #fff;
+      border: 3px solid #a855f7;
+      padding: 10px 28px;
+      font-family: 'Press Start 2P', monospace;
+      font-size: 0.7rem;
+      cursor: pointer;
+      border-radius: 4px;
+      box-shadow: 0 0 14px #7c3aed;
+      transition: background 0.15s, box-shadow 0.15s;
+    }
+
+    #restartBtn:hover {
+      background: #a855f7;
+      box-shadow: 0 0 24px #a855f7;
+    }
+
+    #hint {
+      color: #9ca3af;
+      font-size: 0.45rem;
+      margin-top: 6px;
+    }
+  </style>
+</head>
+<body>
+
+<h1>🐱 JAKARTA CYBER RUN</h1>
+
+<div id="gameWrapper">
+  <canvas id="gameCanvas" width="800" height="280"></canvas>
+  <div id="ui">
+    <div id="scoreDisplay">SCORE: 00000</div>
+    <div id="hiScoreDisplay">BEST: 00000</div>
+  </div>
+  <div id="overlay">
+    <div id="overlayTitle">GAME OVER!</div>
+    <div id="overlayMsg">Kucing robot ketabrak ojol 😿<br/>Jangan nyebrang sembarangan!</div>
+    <button id="restartBtn">▶ RESTART</button>
+    <div id="hint">[ SPASI / KLIK untuk mulai ]</div>
+  </div>
+</div>
+
+<script>
+// ─── CANVAS SETUP ────────────────────────────────────────────────────────────
+const canvas = document.getElementById('gameCanvas');
+const ctx    = canvas.getContext('2d');
+const W = canvas.width;
+const H = canvas.height;
+
+const GROUND_Y  = H - 52;   // top of ground strip
+const CAT_X     = 90;
+const GRAVITY   = 0.55;
+const JUMP_VEL  = -12.5;
+
+// ─── STATE ───────────────────────────────────────────────────────────────────
+let state = 'idle';   // idle | running | dead
+let score = 0, hiScore = 0, frame = 0;
+let speed = 4;
+let animTick = 0;
+
+// ─── PLAYER ──────────────────────────────────────────────────────────────────
+const cat = {
+  x: CAT_X, y: GROUND_Y - 48,
+  w: 38, h: 48,
+  vy: 0,
+  onGround: true,
+  leg: 0,         // 0 or 1  — alternating legs
+  legTimer: 0
+};
+
+function catJump() {
+  if (cat.onGround) {
+    cat.vy = JUMP_VEL;
+    cat.onGround = false;
+  }
+}
+
+// ─── OBSTACLES ───────────────────────────────────────────────────────────────
+let obstacles = [];
+let spawnTimer = 0;
+let spawnInterval = 90;
+
+function spawnObstacle() {
+  const rand = Math.random();
+  // ~20% chance of "aerial" bicycle — appears at mid height
+  if (rand < 0.22) {
+    obstacles.push({
+      type: 'bike',
+      x: W + 10,
+      y: GROUND_Y - 72,    // hovering — must duck-jump over
+      w: 44, h: 36
+    });
+  } else {
+    // ojol motorbike on ground (sometimes 2 in a cluster)
+    const count = Math.random() < 0.35 ? 2 : 1;
+    for (let i = 0; i < count; i++) {
+      obstacles.push({
+        type: 'ojol',
+        x: W + 10 + i * 68,
+        y: GROUND_Y - 44,
+        w: 52, h: 44
+      });
+    }
+  }
+}
+
+// ─── PARALLAX BACKGROUND LAYERS ──────────────────────────────────────────────
+// Each layer: { x, speed, drawFn }
+let bgOffset1 = 0;  // sky / far buildings  (slowest)
+let bgOffset2 = 0;  // mid buildings
+let bgOffset3 = 0;  // near buildings / road details
+let cloudOffset = 0;
+
+// ─── CLOUDS ──────────────────────────────────────────────────────────────────
+const clouds = [
+  { x: 120, y: 28, r: 18 },
+  { x: 320, y: 18, r: 12 },
+  { x: 560, y: 32, r: 22 },
+  { x: 720, y: 14, r: 14 }
+];
+
+// ─── DRAW HELPERS ────────────────────────────────────────────────────────────
+function px(r,g,b) { return `rgb(${r},${g},${b})`; }
+
+function fillRect(x,y,w,h,col) {
+  ctx.fillStyle = col;
+  ctx.fillRect(Math.round(x), Math.round(y), w, h);
+}
+
+// pixel-perfect rectangle shorthand
+function pxRect(x,y,w,h,col){ fillRect(x,y,w,h,col); }
+
+// ─── DRAW SKY ────────────────────────────────────────────────────────────────
+function drawSky() {
+  // gradient dusk sky
+  const grad = ctx.createLinearGradient(0,0,0,GROUND_Y-30);
+  grad.addColorStop(0,   '#1a0a3e');
+  grad.addColorStop(0.4, '#3b1a6b');
+  grad.addColorStop(0.8, '#c0504a');
+  grad.addColorStop(1,   '#f08030');
+  ctx.fillStyle = grad;
+  ctx.fillRect(0, 0, W, GROUND_Y - 30);
+}
+
+// ─── DRAW CLOUDS ─────────────────────────────────────────────────────────────
+function drawClouds(off) {
+  ctx.fillStyle = 'rgba(255,200,180,0.25)';
+  for (const c of clouds) {
+    const cx = ((c.x - off * 0.3) % (W + 60) + W + 60) % (W + 60) - 30;
+    ctx.beginPath();
+    ctx.arc(cx,       c.y,     c.r,   0, Math.PI*2);
+    ctx.arc(cx+c.r,   c.y-4,  c.r*0.7,0, Math.PI*2);
+    ctx.arc(cx-c.r*.6,c.y-2,  c.r*0.6,0, Math.PI*2);
+    ctx.fill();
+  }
+}
+
+// ─── MONAS (landmark) ────────────────────────────────────────────────────────
+function drawMonas(ox) {
+  const bx = ((580 - ox * 0.15) % (W + 200) + W + 200) % (W + 200) - 100;
+  const base = GROUND_Y - 30;
+  // obelisk body
+  pxRect(bx-4, base-80, 8, 80, '#c8a032');
+  // taper
+  pxRect(bx-3, base-90, 6, 10, '#d4aa40');
+  pxRect(bx-2, base-97, 4,  7, '#d4aa40');
+  pxRect(bx-1, base-103,2,  6, '#d4aa40');
+  // flame top
+  pxRect(bx-2, base-110,4,  8, '#ffd700');
+  pxRect(bx-1, base-116,2,  6, '#ffa500');
+  pxRect( bx,  base-121,1,  6, '#ff6600');
+  // base platform
+  pxRect(bx-12,base-16, 24,16, '#a08020');
+  pxRect(bx-18,base-8,  36, 8, '#887018');
+}
+
+// ─── DRAW FAR BUILDINGS ──────────────────────────────────────────────────────
+const farBuildings = generateBuildings(14, 60, 110, 40, 80, '#2a1560', '#3d1f80');
+const midBuildings = generateBuildings(10, 40,  80, 55,100, '#1e0d40', '#2e1060');
+const nearBuildings= generateBuildings( 8, 24,  56, 70,120, '#120828', '#1e1040');
+
+function generateBuildings(count, minH, maxH, minW, maxW, col1, col2) {
+  const arr = [];
+  let cx = 0;
+  for (let i = 0; i < count * 3; i++) {
+    const w = minW + Math.floor(Math.random()*(maxW-minW));
+    const h = minH + Math.floor(Math.random()*(maxH-minH));
+    const windows = [];
+    for (let wy = 6; wy < h-8; wy += 10) {
+      for (let wx = 5; wx < w-5; wx += 10) {
+        if (Math.random() > 0.35) windows.push({wx, wy});
+      }
+    }
+    arr.push({ x: cx, w, h, col: Math.random()>0.5?col1:col2, windows });
+    cx += w + 2 + Math.floor(Math.random()*6);
+  }
+  return arr;
+}
+
+function drawBuildings(buildings, offsetX, ground, winCol) {
+  const totalW = buildings[buildings.length-1].x + buildings[buildings.length-1].w + 20;
+  for (const b of buildings) {
+    const bx = ((b.x - offsetX) % totalW + totalW) % totalW;
+    const by = ground - b.h;
+    pxRect(bx, by, b.w, b.h, b.col);
+    // windows
+    ctx.fillStyle = winCol;
+    for (const win of b.windows) {
+      if (((frame + win.wx) >> 4) % 7 !== 0) {
+        ctx.fillRect(bx + win.wx, by + win.wy, 4, 4);
+      }
+    }
+    // rooftop antenna
+    pxRect(bx + b.w/2 - 1, by - 8, 2, 8, '#555');
+    pxRect(bx + b.w/2 - 3, by - 10, 6, 3, '#555');
+  }
+}
+
+// ─── GROUND ──────────────────────────────────────────────────────────────────
+function drawGround(off) {
+  // asphalt
+  pxRect(0, GROUND_Y - 20, W, 20, '#2c2c2c');
+  pxRect(0, GROUND_Y,       W, H - GROUND_Y, '#1a1a1a');
+  // yellow center line dashes
+  ctx.fillStyle = '#f0c000';
+  for (let i = 0; i < 12; i++) {
+    const dx = ((i*80 - off*1.5) % (W+80) + W+80) % (W+80) - 40;
+    ctx.fillRect(dx, GROUND_Y - 10, 40, 4);
+  }
+  // white edge line
+  ctx.fillStyle = '#e0e0e0';
+  ctx.fillRect(0, GROUND_Y - 20, W, 2);
+}
+
+// ─── STREET LAMPS ────────────────────────────────────────────────────────────
+function drawLamps(off) {
+  for (let i = 0; i < 6; i++) {
+    const lx = ((i*140 - off * 1.0) % (W+140) + W+140) % (W+140) - 70;
+    pxRect(lx, GROUND_Y-66, 4, 66, '#444');
+    pxRect(lx-10, GROUND_Y-68, 24, 6, '#555');
+    // glow
+    ctx.fillStyle = 'rgba(255,220,100,0.18)';
+    ctx.beginPath();
+    ctx.arc(lx+2, GROUND_Y-68, 18, 0, Math.PI*2);
+    ctx.fill();
+    pxRect(lx-4, GROUND_Y-72, 12, 5, '#ffe080');
+  }
+}
+
+
+// ─── DRAW ROBOT CAT ──────────────────────────────────────────────────────────
+function drawCat(x, y, legFrame, jumping) {
+  const px2 = (rx,ry,rw,rh,col) => pxRect(x+rx, y+ry, rw, rh, col);
+
+  // antenna
+  px2(14, -8, 3, 8, '#888');
+  px2(11, -10, 4, 4, '#ff8c00');   // antenna tip (orange glow)
+
+  // head
+  px2(6, 0, 26, 22, '#ff8c00');      // head base orange
+  px2(4, 3, 30, 16, '#ff9a1a');      // head highlight
+  // helmet / robot band
+  px2(6, 0, 26, 6, '#d06000');
+  // eyes
+  px2(10, 7, 6, 6, '#000');          // eye socket L
+  px2(22, 7, 6, 6, '#000');          // eye socket R
+  px2(11, 8, 4, 4, '#00ffff');       // iris cyan L
+  px2(23, 8, 4, 4, '#00ffff');       // iris cyan R
+  px2(12, 9, 2, 2, '#fff');          // shine L
+  px2(24, 9, 2, 2, '#fff');          // shine R
+  // nose
+  px2(17, 15, 4, 3, '#d06000');
+  // mouth
+  px2(14, 19, 3, 2, '#d06000');
+  px2(21, 19, 3, 2, '#d06000');
+  // ears
+  px2(6,  -4, 6, 6, '#ff8c00');
+  px2(26, -4, 6, 6, '#ff8c00');
+  px2(8,  -3, 3, 3, '#ffb060');
+  px2(28, -3, 3, 3, '#ffb060');
+
+  // body / chest plate
+  px2(7, 22, 24, 20, '#cc6600');
+  px2(10,24, 18, 14, '#1a1a2e');     // screen/chest panel
+  px2(12,26,  6,  6, '#7c3aed');     // purple gem
+  px2(20,26,  6,  6, '#00ffcc');     // teal gem
+  px2(14,33,  2,  4, '#ff4400');     // chest light
+
+  // arms
+  px2(0,  22, 7, 16, '#cc6600');
+  px2(31, 22, 7, 16, '#cc6600');
+  px2(0,  36, 8,  5, '#888');        // claw L
+  px2(30, 36, 8,  5, '#888');        // claw R
+
+  // legs / feet — animate only when on ground
+  const legOff = (!jumping && legFrame) ? 4 : 0;
+  // left leg
+  px2(9, 42, 10, 10 - legOff, '#cc6600');
+  px2(7, 48 - legOff, 12, 6, '#888');
+  // right leg
+  px2(20, 42, 10, 10 + legOff, '#cc6600');
+  px2(18, 48 + legOff, 12, 6, '#888');
+
+  // tail
+  if (!jumping) {
+    const tw = legFrame ? 2 : -2;
+    px2(-4, 28 + tw, 8, 6, '#ff8c00');
+    px2(-8, 24 + tw, 6, 6, '#ff8c00');
+  } else {
+    px2(-4, 26, 8, 6, '#ff8c00');
+    px2(-8, 22, 6, 6, '#ff8c00');
+  }
+}
+
+// ─── DRAW OJOL (motorbike) ────────────────────────────────────────────────────
+function drawOjol(x, y) {
+  const p = (rx,ry,rw,rh,col) => pxRect(x+rx, y+ry, rw, rh, col);
+
+  // wheels
+  p(2,  28, 14, 14, '#222');   p(3,  29, 12, 12, '#333');
+  p(36, 28, 14, 14, '#222');   p(37, 29, 12, 12, '#333');
+  p(6,  31,  6,  6, '#888');   p(40, 31,  6,  6, '#888');
+
+  // frame
+  p(10, 20, 32, 12, '#1a7a3a');   // main green body
+  p(8,  18,  6, 10, '#1a7a3a');   // engine block
+  p(38, 14, 10,  8, '#1a7a3a');   // headlight mount
+  p(40, 10,  8,  6, '#ffe060');   // headlight
+
+  // seat / rider body
+  p(18, 10, 18, 10, '#0d5c2a');   // seat
+  p(20, 0,  14, 14, '#2a5c1a');   // rider torso (green jacket)
+  p(22,-10, 10, 12, '#1a1a1a');   // helmet
+  p(24,-8,   6,  6, '#333');      // visor
+  p(25,-7,   4,  3, '#ff8c00');   // visor stripe
+  p(18, 14, 16,  6, '#1a5c14');   // hips
+
+  // GrabBike sign on back
+  p(10, 8,  10, 12, '#1db954');
+  p(12,10,  6,  8, '#fff');
+  p(13,12,  4,  4, '#1db954');
+
+  // exhaust puff (speed lines)
+  ctx.fillStyle = 'rgba(200,200,200,0.35)';
+  ctx.fillRect(x-8, y+20, 8, 3);
+  ctx.fillRect(x-12,y+24, 6, 2);
+}
+
+// ─── DRAW BICYCLE (aerial obstacle) ─────────────────────────────────────────
+function drawBike(x, y) {
+  const p = (rx,ry,rw,rh,col) => pxRect(x+rx, y+ry, rw, rh, col);
+
+  // wheels
+  p(0,  16, 14, 14, '#555');  p(1,  17, 12, 12, '#666');
+  p(30, 16, 14, 14, '#555');  p(31, 17, 12, 12, '#666');
+  p(4,  21,  6,  6, '#999');  p(34, 21,  6,  6, '#999');
+
+  // frame
+  p(7,  22, 22,  4, '#888');   // bottom
+  p(7,  12, 4,  14, '#888');   // front fork
+  p(30, 12, 4,  14, '#888');   // rear fork
+  p(7,  12, 26,  6, '#888');   // top tube
+  p(18, 12, 4,  14, '#aaa');   // seat tube
+
+  // handlebars
+  p(4,  8, 8,  4, '#777');
+  p(2,  6, 4,  4, '#777');
+  p(30,  8, 8,  4, '#777');
+
+  // seat
+  p(16, 8, 12, 4, '#3a1a60');
+
+  // rider silhouette (basic)
+  p(18, -14,10,18, '#d06000');   // body
+  p(20, -26, 8,14, '#ff8c00');   // head + helmet
+  p(16,  4,  6, 8, '#c05000');   // leg
+
+  // motion lines
+  ctx.fillStyle = 'rgba(180,180,255,0.3)';
+  ctx.fillRect(x-10, y+20, 10, 2);
+  ctx.fillRect(x-14, y+25, 8,  2);
+}
+
+
+// ─── COLLISION DETECTION ─────────────────────────────────────────────────────
+function rectsOverlap(ax,ay,aw,ah, bx,by,bw,bh) {
+  const margin = 6;   // slight forgiveness
+  return ax + margin < bx + bw - margin &&
+         ax + aw - margin > bx + margin &&
+         ay + margin < by + bh - margin &&
+         ay + ah - margin > by + margin;
+}
+
+// ─── UPDATE ──────────────────────────────────────────────────────────────────
+function update() {
+  frame++;
+  animTick++;
+
+  // speed ramp: +1 every 400 score, up to max 14
+  speed = Math.min(4 + Math.floor(score / 400), 14);
+
+  // cat physics
+  cat.vy += GRAVITY;
+  cat.y  += cat.vy;
+  if (cat.y >= GROUND_Y - cat.h) {
+    cat.y = GROUND_Y - cat.h;
+    cat.vy = 0;
+    cat.onGround = true;
+  }
+
+  // leg animation
+  if (cat.onGround) {
+    cat.legTimer++;
+    if (cat.legTimer > 8) { cat.leg ^= 1; cat.legTimer = 0; }
+  }
+
+  // parallax offsets
+  bgOffset1 += speed * 0.12;
+  bgOffset2 += speed * 0.28;
+  bgOffset3 += speed * 0.55;
+  cloudOffset += speed * 0.06;
+
+  // score
+  score++;
+  if (score > hiScore) hiScore = score;
+  document.getElementById('scoreDisplay').textContent =
+    'SCORE: ' + String(score).padStart(5,'0');
+  document.getElementById('hiScoreDisplay').textContent =
+    'BEST: '  + String(hiScore).padStart(5,'0');
+
+  // spawn obstacles
+  spawnTimer++;
+  // dynamic spawn interval: faster at higher speeds
+  spawnInterval = Math.max(55, 100 - Math.floor(score / 300) * 5);
+  if (spawnTimer >= spawnInterval) {
+    spawnTimer = 0;
+    spawnObstacle();
+  }
+
+  // move & cull obstacles
+  for (let i = obstacles.length - 1; i >= 0; i--) {
+    obstacles[i].x -= speed;
+    if (obstacles[i].x + obstacles[i].w < -20) {
+      obstacles.splice(i, 1);
+    }
+  }
+
+  // collision check
+  for (const obs of obstacles) {
+    if (rectsOverlap(cat.x, cat.y, cat.w, cat.h,
+                     obs.x, obs.y, obs.w, obs.h)) {
+      triggerGameOver();
+      return;
+    }
+  }
+}
+
+// ─── DRAW FRAME ──────────────────────────────────────────────────────────────
+function draw() {
+  ctx.clearRect(0, 0, W, H);
+
+  drawSky();
+  drawClouds(cloudOffset);
+  drawMonas(bgOffset1);
+  drawBuildings(farBuildings,  bgOffset1, GROUND_Y - 30, 'rgba(180,140,255,0.45)');
+  drawBuildings(midBuildings,  bgOffset2, GROUND_Y - 20, 'rgba(255,160,80,0.50)');
+  drawBuildings(nearBuildings, bgOffset3, GROUND_Y - 8,  'rgba(255,200,80,0.55)');
+  drawLamps(bgOffset3);
+  drawGround(bgOffset3);
+
+  // draw obstacles
+  for (const obs of obstacles) {
+    if (obs.type === 'ojol') drawOjol(obs.x, obs.y);
+    else                     drawBike(obs.x, obs.y);
+  }
+
+  // draw cat
+  drawCat(cat.x, cat.y, cat.leg, !cat.onGround);
+
+  // debug hitboxes (uncomment to see)
+  // ctx.strokeStyle='lime'; ctx.strokeRect(cat.x,cat.y,cat.w,cat.h);
+  // for(const o of obstacles){ctx.strokeStyle='red';ctx.strokeRect(o.x,o.y,o.w,o.h);}
+}
+
+// ─── GAME LOOP ───────────────────────────────────────────────────────────────
+let rafId = null;
+
+function loop() {
+  if (state !== 'running') return;
+  update();
+  draw();
+  rafId = requestAnimationFrame(loop);
+}
+
+// ─── START / RESTART ─────────────────────────────────────────────────────────
+function startGame() {
+  score = 0;
+  frame = 0;
+  speed = 4;
+  obstacles = [];
+  spawnTimer = 0;
+  bgOffset1 = bgOffset2 = bgOffset3 = cloudOffset = 0;
+
+  cat.y = GROUND_Y - cat.h;
+  cat.vy = 0;
+  cat.onGround = true;
+  cat.leg = 0;
+  cat.legTimer = 0;
+
+  document.getElementById('overlay').classList.add('hidden');
+
+  state = 'running';
+  cancelAnimationFrame(rafId);
+  loop();
+}
+
+// ─── GAME OVER ───────────────────────────────────────────────────────────────
+function triggerGameOver() {
+  state = 'dead';
+
+  // crash effect — briefly flash red
+  ctx.fillStyle = 'rgba(255,0,0,0.25)';
+  ctx.fillRect(0, 0, W, H);
+
+  const overlay  = document.getElementById('overlay');
+  const title    = document.getElementById('overlayTitle');
+  const msg      = document.getElementById('overlayMsg');
+  const hint     = document.getElementById('hint');
+
+  title.textContent = 'GAME OVER!';
+  msg.textContent   = `Skor: ${String(score).padStart(5,'0')}  |  Terbaik: ${String(hiScore).padStart(5,'0')}`;
+  hint.textContent  = '[ SPASI / KLIK untuk restart ]';
+  overlay.classList.remove('hidden');
+}
+
+// ─── IDLE DRAW (before start) ────────────────────────────────────────────────
+function drawIdle() {
+  bgOffset1 = bgOffset2 = bgOffset3 = cloudOffset = 0;
+  drawSky();
+  drawClouds(0);
+  drawMonas(0);
+  drawBuildings(farBuildings,  0, GROUND_Y - 30, 'rgba(180,140,255,0.45)');
+  drawBuildings(midBuildings,  0, GROUND_Y - 20, 'rgba(255,160,80,0.50)');
+  drawBuildings(nearBuildings, 0, GROUND_Y - 8,  'rgba(255,200,80,0.55)');
+  drawLamps(0);
+  drawGround(0);
+  drawCat(cat.x, cat.y, 0, false);
+}
+
+// ─── CONTROLS ────────────────────────────────────────────────────────────────
+document.addEventListener('keydown', e => {
+  if (e.code === 'Space' || e.code === 'ArrowUp') {
+    e.preventDefault();
+    if (state === 'running') catJump();
+    else if (state === 'idle' || state === 'dead') startGame();
+  }
+});
+
+canvas.addEventListener('pointerdown', () => {
+  if (state === 'running') catJump();
+  else startGame();
+});
+
+document.getElementById('restartBtn').addEventListener('click', startGame);
+
+// ─── INITIAL RENDER ──────────────────────────────────────────────────────────
+(function init() {
+  const overlay = document.getElementById('overlay');
+  const title   = document.getElementById('overlayTitle');
+  const msg     = document.getElementById('overlayMsg');
+  const hint    = document.getElementById('hint');
+
+  title.textContent = '🐱 JAKARTA CYBER RUN';
+  title.style.fontSize = '0.9rem';
+  title.style.animation = 'none';
+  title.style.color = '#ff8c00';
+  msg.textContent  = 'Hindari Ojol & Sepeda!';
+  hint.textContent = '[ SPASI / KLIK untuk mulai ]';
+
+  overlay.classList.remove('hidden');
+  state = 'idle';
+  drawIdle();
+})();
+</script>
+</body>
+</html>
